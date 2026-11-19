@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+!.env.example
+client_secret*.json
+dormhive_restore.sql
+tmp-*.mjs
+core/logs/
+core/uploads/

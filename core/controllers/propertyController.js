@@ -109,6 +109,20 @@ function validateOwnershipProof(file, required) {
   return proof;
 }
 
+export function parseAdvancePaymentMonths(value) {
+  if (value === undefined) return undefined;
+  if (value === null || (typeof value === 'string' && value.trim() === '')) return null;
+
+  const rawValue = String(value).trim();
+  if (!/^\d+$/.test(rawValue) || Number(rawValue) > 12) {
+    const error = new Error('Advance payment must be a whole number from 0 to 12 months.');
+    error.statusCode = 422;
+    error.expose = true;
+    throw error;
+  }
+  return Number(rawValue);
+}
+
 async function validateOwnerListing({ request, address, municipality, barangay, excludeId = null, needsPendingSlot = true }) {
   if (request.user.role !== 'owner') return;
   if (needsPendingSlot && await properties.countPendingByOwner(request.user.id) >= 3) {
@@ -232,7 +246,7 @@ export async function create(request, response, next) {
         ? request.body.securityDeposit || null
         : undefined,
       advancePaymentMonths: request.body.advancePaymentMonths !== undefined
-        ? request.body.advancePaymentMonths === '' ? null : request.body.advancePaymentMonths
+        ? parseAdvancePaymentMonths(request.body.advancePaymentMonths)
         : undefined,
       amenities
     };
@@ -368,7 +382,7 @@ export async function update(request, response, next) {
         ? request.body.securityDeposit || null
         : undefined,
       advancePaymentMonths: request.body.advancePaymentMonths !== undefined
-        ? request.body.advancePaymentMonths === '' ? null : request.body.advancePaymentMonths
+        ? parseAdvancePaymentMonths(request.body.advancePaymentMonths)
         : undefined,
       amenities
     };

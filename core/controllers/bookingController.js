@@ -2,6 +2,32 @@ import * as bookings from '../models/Booking.js';
 import * as properties from '../models/Property.js';
 import { createConversation } from '../models/Message.js';
 import { findById as findPropertyById } from '../models/Property.js';
+import { validateUpload } from '../utils/fileValidation.js';
+
+const VALID_ID_TYPES = new Set(['philid', 'passport', 'drivers_license', 'umid', 'other']);
+const VALID_ID_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'application/pdf']);
+
+export function prepareBookingIdentityDocuments(files, idType, consent) {
+  if (consent !== 'true') {
+    return { valid: false, message: 'Consent to share the ID with the property owner and DormHive administrators is required.' };
+  }
+  if (!VALID_ID_TYPES.has(String(idType ?? ''))) {
+    return { valid: false, message: 'Select a valid government-issued ID type.' };
+  }
+
+  const documents = [];
+  for (const [side, fieldName] of [['front', 'idFront'], ['back', 'idBack']]) {
+    const file = files?.[fieldName]?.[0];
+    if (!file) return { valid: false, message: 'Upload both the front and back of your government-issued ID.' };
+    const metadata = validateUpload(file);
+    if (!VALID_ID_MIME_TYPES.has(metadata.mimeType)) {
+      return { valid: false, message: 'ID files must be JPEG, PNG, or PDF.' };
+    }
+    documents.push({ ...metadata, side, buffer: file.buffer });
+  }
+
+  return { valid: true, idType: String(idType), documents };
+}
 
 function isValidSqlDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -38,6 +64,9 @@ function remainingRentalSlots(totalSlots, approvedSlots) {
 
 export async function create(request, response, next) {
   try {
+    const identityDocuments = prepareBookingIdentityDocuments(request.files, request.body.idType, request.body.idShareConsent);
+    if (!identityDocuments.valid) return response.status(422).json({ message: identityDocuments.message });
+
     const moveOutSchedule = resolveMoveOutSchedule(
       request.body.moveInDate,
       request.body.moveOutDate,
@@ -58,7 +87,11 @@ export async function create(request, response, next) {
     if (!hasRentalSlotCapacity(property.total_slots, approvedSlots)) {
       return response.status(409).json({ message: `This listing has no rental slots available. Only ${remainingRentalSlots(property.total_slots, approvedSlots)} slot(s) remain.` });
     }
-    const booking = await bookings.create(request.user.id, { ...request.body, ownerId: property.owner_id, ...moveOutSchedule, ...viewingSchedule });
+    const booking = await bookings.create(
+      request.user.id,
+      { ...request.body, ownerId: property.owner_id, ...moveOutSchedule, ...viewingSchedule, idType: identityDocuments.idType },
+      identityDocuments.documents
+    );
     await createConversation({ tenantId: request.user.id, ownerId: property.owner_id, propertyId: property.id });
     response.status(201).json({ data: booking });
   } catch (error) { next(error); }
@@ -93,6 +126,42 @@ export async function get(request, response, next) {
   } catch (error) { next(error); }
 }
 
+export async function listIdentityDocuments(request, response, next) {
+  try {
+    const booking = await bookings.findById(request.params.id);
+    if (!booking) return response.status(404).json({ message: 'Booking not found.' });
+    if (!bookings.canViewBookingIdentityDocuments(booking, request.user)) {
+      return response.status(403).json({ message: 'Permission denied.' });
+    }
+    response.set('Cache-Control', 'private, no-store');
+    return response.json({ data: await bookings.listIdentityDocuments(booking.id) });
+  } catch (error) { next(error); }
+}
+
+export async function getIdentityDocument(request, response, next) {
+  try {
+    const booking = await bookings.findById(request.params.id);
+    if (!booking) return response.status(404).json({ message: 'Booking not found.' });
+    if (!bookings.canViewBookingIdentityDocuments(booking, request.user)) {
+      return response.status(403).json({ message: 'Permission denied.' });
+    }
+    const side = String(request.params.side ?? '').toLowerCase();
+    if (!['front', 'back'].includes(side)) return response.status(404).end();
+    const document = await bookings.findIdentityDocument(booking.id, side);
+    if (!document) return response.status(404).end();
+    const filename = String(document.original_filename).replace(/[\r\n"\\]/g, '_');
+    response.set({
+      'Content-Type': document.mime_type,
+      'Content-Length': String(document.file_size),
+      'Content-Disposition': `inline; filename="${filename}"`,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer'
+    });
+    return response.end(document.file_data);
+  } catch (error) { next(error); }
+}
+
 export async function updateStatus(request, response, next) {
   try {
     const booking = await bookings.findById(request.params.id);
@@ -100,8 +169,11 @@ export async function updateStatus(request, response, next) {
     const allowed = request.user.role === 'admin' || booking.owner_id === request.user.id || (booking.tenant_id === request.user.id && request.body.status === 'cancelled');
     if (!allowed) return response.status(403).json({ message: 'Permission denied.' });
     const nextStatus = String(request.body.status || '').toLowerCase();
-    if (!['approved', 'rejected', 'cancelled'].includes(nextStatus)) return response.status(422).json({ message: 'Invalid booking status.' });
+    if (!['approved', 'rejected', 'cancelled', 'completed'].includes(nextStatus)) return response.status(422).json({ message: 'Invalid booking status.' });
     const previousStatus = String(booking.status || '').toLowerCase();
+    if (nextStatus === 'completed' && (request.user.role !== 'owner' && request.user.role !== 'admin' || previousStatus !== 'approved')) {
+      return response.status(409).json({ message: 'Only the owner can mark an approved stay as ended.' });
+    }
     if (nextStatus === 'approved' && previousStatus !== 'approved') {
       const property = await findPropertyById(booking.property_id);
       const approvedSlots = await bookings.countApprovedSlots(booking.property_id);
@@ -114,6 +186,9 @@ export async function updateStatus(request, response, next) {
       }
     }
     const updated = await bookings.updateStatus(booking.id, nextStatus);
+    if (bookings.shouldDeleteIdentityDocumentsForStatus(nextStatus)) {
+      await bookings.deleteIdentityDocuments(booking.id);
+    }
     if (previousStatus === 'approved' || nextStatus === 'approved') {
       await properties.syncAvailability(booking.property_id);
     }

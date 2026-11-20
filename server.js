@@ -8,6 +8,7 @@ import os from 'node:os';
 import pool from './core/config/database.js';
 import apiRoutes from './core/routes/index.js';
 import { scheduleDatabaseBackup } from './core/services/databaseBackup.js';
+import { scheduleBookingIdentityCleanup } from './core/services/bookingIdentityCleanup.js';
 import { publishDataChange } from './core/services/realtimeEvents.js';
 import { errorHandler, notFound } from './core/middleware/errorHandler.js';
 
@@ -21,6 +22,7 @@ const allowedOrigins = (process.env.CLIENT_URL ?? 'http://localhost:3000,https:/
   .filter(Boolean);
 
 const isLocalDevOrigin = (origin = '') => /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/i.test(origin);
+const isLocalHost = (hostname = '') => /^(localhost|127\.0\.0\.1|::1)$/i.test(hostname);
 
 app.disable('x-powered-by');
 app.use(helmet({
@@ -47,7 +49,8 @@ app.use(cors({
 app.use('/api', rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 300,
-  skip: (request) => process.env.NODE_ENV !== 'production' && isLocalDevOrigin(request.get('origin') ?? ''),
+  skip: (request) => isLocalDevOrigin(request.get('origin') ?? '')
+    && (process.env.NODE_ENV !== 'production' || isLocalHost(request.hostname)),
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   handler: (_request, response) => response.status(429).json({ message: 'Too many requests. Please try again later.' })
@@ -130,6 +133,7 @@ const startServer = (listenPort) => {
 const server = app.listen(port, () => {
   console.log(`DormHive API listening on port ${port}`);
 });
+scheduleBookingIdentityCleanup();
 
 server.on('error', (error) => {
   if (error && error.code === 'EADDRINUSE') {

@@ -216,6 +216,10 @@ export async function update(id, input) {
   return syncAvailability(id);
 }
 
+export async function attachOwnershipDocument(id, documentId) {
+  await query('UPDATE properties SET ownership_document_id = ? WHERE id = ?', [documentId, id]);
+}
+
 export async function appendImage(id, imageUrl) {
   const property = await findById(id);
   let images = [];

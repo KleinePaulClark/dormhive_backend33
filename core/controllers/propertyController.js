@@ -260,7 +260,7 @@ export async function create(request, response, next) {
           mimeType: proofMetadata.mimeType,
           buffer: ownershipProofFile.buffer
         });
-        property = await properties.update(property.id, { ownershipDocumentId: ownershipDocument.id });
+        await properties.attachOwnershipDocument(property.id, ownershipDocument.id);
       }
     } catch (error) {
       if (property?.id) await properties.remove(property.id).catch(() => {});

@@ -133,3 +133,53 @@ test('property creation uses its category without a primary room type column', a
     }
   }
 });
+
+test('attaching ownership proof associates its media record with the property', async () => {
+  const connection = await mysql.createConnection(connectionConfig);
+  const owner = await createTestOwner(connection);
+  let propertyId;
+  let mediaId;
+
+  try {
+    const { attachOwnershipDocument, create } = await import('../models/Property.js');
+    const { create: createMediaFile } = await import('../models/Media.js');
+    const property = await create(owner.id, {
+      title: `Ownership Proof Test ${Date.now()}`,
+      address: '789 Test Street',
+      municipality: 'Quezon City',
+      propertyCategory: 'bedspace',
+      monthlyRent: 12000,
+      rentalArrangement: 'exclusive',
+      maxOccupants: 1
+    });
+    propertyId = property.id;
+
+    const document = await createMediaFile({
+      uploadedBy: owner.id,
+      propertyId: property.id,
+      isPrivate: true,
+      filename: 'proof.jpg',
+      mimeType: 'image/jpeg',
+      buffer: Buffer.from('test proof')
+    });
+    mediaId = document.id;
+    await attachOwnershipDocument(property.id, document.id);
+
+    const [rows] = await connection.execute(
+      'SELECT ownership_document_id FROM properties WHERE id = ?',
+      [property.id]
+    );
+    assert.equal(Number(rows[0]?.ownership_document_id), Number(document.id));
+  } finally {
+    try {
+      if (mediaId) await connection.execute('DELETE FROM media_files WHERE id = ?', [mediaId]);
+      if (propertyId) {
+        await connection.execute('DELETE FROM rental_spaces WHERE property_id = ?', [propertyId]);
+        await connection.execute('DELETE FROM properties WHERE id = ?', [propertyId]);
+      }
+      await connection.execute('DELETE FROM users WHERE id = ?', [owner.id]);
+    } finally {
+      await connection.end();
+    }
+  }
+});

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import bcrypt from 'bcrypt';
 import { OAuth2Client } from 'google-auth-library';
 import pool from '../config/database.js';
-import { becomeOwner, googleAuthConfig, googleLogin, login } from '../controllers/authController.js';
+import { becomeOwner, googleAuthConfig, googleLogin, login, oauthStart } from '../controllers/authController.js';
 
 function makeResponse() {
   return {
@@ -51,6 +51,40 @@ test('Google config reports missing server configuration', () => {
     assert.match(response.payload.message, /not configured/i);
   } finally {
     if (previousClientId !== undefined) process.env.GOOGLE_CLIENT_ID = previousClientId;
+  }
+});
+
+test('Google OAuth asks the account chooser to appear after the sign-in button is clicked', () => {
+  const previousClientId = process.env.GOOGLE_CLIENT_ID;
+  const previousClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const previousApiUrl = process.env.API_URL;
+  const previousJwtSecret = process.env.JWT_ACCESS_SECRET;
+  process.env.GOOGLE_CLIENT_ID = 'google-client-id-for-test';
+  process.env.GOOGLE_CLIENT_SECRET = 'google-client-secret-for-test';
+  process.env.API_URL = 'https://api.example.test';
+  process.env.JWT_ACCESS_SECRET = 'test-jwt-secret';
+  const response = {
+    cookie() {},
+    redirect(url) {
+      this.redirectUrl = url;
+      return this;
+    }
+  };
+
+  try {
+    oauthStart({ params: { provider: 'google' }, query: { mode: 'login' } }, response);
+    const authorizationUrl = new URL(response.redirectUrl);
+    assert.equal(authorizationUrl.searchParams.get('prompt'), 'select_account');
+    assert.equal(authorizationUrl.searchParams.get('response_type'), 'code');
+  } finally {
+    if (previousClientId === undefined) delete process.env.GOOGLE_CLIENT_ID;
+    else process.env.GOOGLE_CLIENT_ID = previousClientId;
+    if (previousClientSecret === undefined) delete process.env.GOOGLE_CLIENT_SECRET;
+    else process.env.GOOGLE_CLIENT_SECRET = previousClientSecret;
+    if (previousApiUrl === undefined) delete process.env.API_URL;
+    else process.env.API_URL = previousApiUrl;
+    if (previousJwtSecret === undefined) delete process.env.JWT_ACCESS_SECRET;
+    else process.env.JWT_ACCESS_SECRET = previousJwtSecret;
   }
 });
 

@@ -166,6 +166,7 @@ export function oauthStart(request, response) {
     maxAge: 10 * 60 * 1000
   });
   const params = new URLSearchParams({ client_id: config.clientId(), redirect_uri: oauthRedirectUri(provider), response_type: 'code', scope: config.scope, state });
+  if (provider === 'google') params.set('prompt', 'select_account');
   return response.redirect(`${config.authorizeUrl}?${params}`);
 }
 

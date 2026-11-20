@@ -10,9 +10,11 @@ import apiRoutes from './core/routes/index.js';
 import { scheduleDatabaseBackup } from './core/services/databaseBackup.js';
 import { scheduleBookingIdentityCleanup } from './core/services/bookingIdentityCleanup.js';
 import { publishDataChange } from './core/services/realtimeEvents.js';
+import { createAuthenticatedRateLimiter, identifyRateLimitUser } from './core/middleware/rateLimitIdentity.js';
 import { errorHandler, notFound } from './core/middleware/errorHandler.js';
 
 const app = express();
+app.set('trust proxy', 1);
 const serverStartedAt = Date.now();
 const port = Number.parseInt(process.env.PORT ?? '5000', 10);
 const fallbackPort = port === 5000 ? 5001 : port + 1;
@@ -23,6 +25,8 @@ const allowedOrigins = (process.env.CLIENT_URL ?? 'http://localhost:3000,https:/
 
 const isLocalDevOrigin = (origin = '') => /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/i.test(origin);
 const isLocalHost = (hostname = '') => /^(localhost|127\.0\.0\.1|::1)$/i.test(hostname);
+const skipLocalDevRateLimit = (request) => isLocalDevOrigin(request.get('origin') ?? '')
+  && (process.env.NODE_ENV !== 'production' || isLocalHost(request.hostname));
 
 app.disable('x-powered-by');
 app.use(helmet({
@@ -46,15 +50,16 @@ app.use(cors({
   },
   credentials: true
 }));
+app.use('/api', identifyRateLimitUser);
 app.use('/api', rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 300,
-  skip: (request) => isLocalDevOrigin(request.get('origin') ?? '')
-    && (process.env.NODE_ENV !== 'production' || isLocalHost(request.hostname)),
+  limit: 3000,
+  skip: skipLocalDevRateLimit,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   handler: (_request, response) => response.status(429).json({ message: 'Too many requests. Please try again later.' })
 }));
+app.use('/api', createAuthenticatedRateLimiter({ skip: skipLocalDevRateLimit }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false }));
 app.use('/api/v1', (request, response, next) => {

@@ -11,6 +11,13 @@ const passwordResetLimiter = rateLimit({
 	legacyHeaders: false,
 	message: { message: 'Too many password reset attempts. Please try again later.' }
 });
+const registrationLimiter = rateLimit({
+	windowMs: 15 * 60 * 1000,
+	limit: 300,
+	standardHeaders: 'draft-7',
+	legacyHeaders: false,
+	message: { message: 'Too many registration attempts. Please try again later.' }
+});
 const googleLoginLimiter = rateLimit({
 	windowMs: 15 * 60 * 1000,
 	limit: 30,
@@ -18,7 +25,7 @@ const googleLoginLimiter = rateLimit({
 	legacyHeaders: false,
 	message: { message: 'Too many Google sign-in attempts. Please try again later.' }
 });
-router.post('/register', validate(['first_name', 'last_name', 'username', 'email', 'password']), register);
+router.post('/register', registrationLimiter, validate(['first_name', 'last_name', 'username', 'email', 'password']), register);
 router.post('/registration-role', validate(['onboardingToken', 'role']), setRegistrationRole);
 router.post('/login', validate(['password']), login);
 router.get('/password-reset/status', passwordResetEmailStatus);

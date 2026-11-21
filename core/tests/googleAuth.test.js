@@ -1,5 +1,8 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import bcrypt from 'bcrypt';
 import { OAuth2Client } from 'google-auth-library';
 import pool from '../config/database.js';
@@ -81,6 +84,47 @@ test('Google OAuth asks the account chooser to appear after the sign-in button i
     else process.env.GOOGLE_CLIENT_ID = previousClientId;
     if (previousClientSecret === undefined) delete process.env.GOOGLE_CLIENT_SECRET;
     else process.env.GOOGLE_CLIENT_SECRET = previousClientSecret;
+    if (previousApiUrl === undefined) delete process.env.API_URL;
+    else process.env.API_URL = previousApiUrl;
+    if (previousJwtSecret === undefined) delete process.env.JWT_ACCESS_SECRET;
+    else process.env.JWT_ACCESS_SECRET = previousJwtSecret;
+  }
+});
+
+test('Google OAuth loads its client secret from the configured credentials file', () => {
+  const previousClientId = process.env.GOOGLE_CLIENT_ID;
+  const previousClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const previousCredentialsFile = process.env.GOOGLE_OAUTH_CREDENTIALS_FILE;
+  const previousApiUrl = process.env.API_URL;
+  const previousJwtSecret = process.env.JWT_ACCESS_SECRET;
+  const credentialsDirectory = mkdtempSync(path.join(os.tmpdir(), 'dormhive-google-oauth-'));
+  process.env.GOOGLE_CLIENT_ID = 'google-client-id-for-test';
+  delete process.env.GOOGLE_CLIENT_SECRET;
+  process.env.GOOGLE_OAUTH_CREDENTIALS_FILE = path.join(credentialsDirectory, 'credentials.json');
+  writeFileSync(process.env.GOOGLE_OAUTH_CREDENTIALS_FILE, JSON.stringify({
+    web: { client_id: 'google-client-id-for-test', client_secret: 'google-client-secret-for-test' }
+  }));
+  process.env.API_URL = 'https://api.example.test';
+  process.env.JWT_ACCESS_SECRET = 'test-jwt-secret';
+  const response = {
+    cookie() {},
+    redirect(url) {
+      this.redirectUrl = url;
+      return this;
+    }
+  };
+
+  try {
+    oauthStart({ params: { provider: 'google' }, query: { mode: 'login' } }, response);
+    assert.equal(new URL(response.redirectUrl).origin, 'https://accounts.google.com');
+  } finally {
+    rmSync(credentialsDirectory, { recursive: true, force: true });
+    if (previousClientId === undefined) delete process.env.GOOGLE_CLIENT_ID;
+    else process.env.GOOGLE_CLIENT_ID = previousClientId;
+    if (previousClientSecret === undefined) delete process.env.GOOGLE_CLIENT_SECRET;
+    else process.env.GOOGLE_CLIENT_SECRET = previousClientSecret;
+    if (previousCredentialsFile === undefined) delete process.env.GOOGLE_OAUTH_CREDENTIALS_FILE;
+    else process.env.GOOGLE_OAUTH_CREDENTIALS_FILE = previousCredentialsFile;
     if (previousApiUrl === undefined) delete process.env.API_URL;
     else process.env.API_URL = previousApiUrl;
     if (previousJwtSecret === undefined) delete process.env.JWT_ACCESS_SECRET;

@@ -1,6 +1,9 @@
 import bcrypt from 'bcrypt';
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import jwt from 'jsonwebtoken';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { OAuth2Client } from 'google-auth-library';
 import {
   create,
@@ -17,6 +20,21 @@ import {
 import { isEmailConfigured, sendPasswordResetEmail } from '../services/email.js';
 
 const googleOAuthClient = new OAuth2Client();
+const backendDirectory = fileURLToPath(new URL('../..', import.meta.url));
+
+function googleClientSecret() {
+  if (process.env.GOOGLE_CLIENT_SECRET) return process.env.GOOGLE_CLIENT_SECRET;
+  const credentialsFile = process.env.GOOGLE_OAUTH_CREDENTIALS_FILE;
+  if (!credentialsFile) return undefined;
+
+  try {
+    const credentials = JSON.parse(readFileSync(resolve(backendDirectory, credentialsFile), 'utf8'));
+    const oauthClient = credentials.web ?? credentials.installed ?? credentials;
+    return oauthClient.client_id === process.env.GOOGLE_CLIENT_ID ? oauthClient.client_secret : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function tokenFor(user) {
   return jwt.sign({ sub: user.id, role: user.role }, process.env.JWT_ACCESS_SECRET, { expiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '15m' });
@@ -48,25 +66,9 @@ async function createSocialAccount(profile, email) {
   }
 }
 
-const oauthProviders = {
-  google: {
-    clientId: () => process.env.GOOGLE_CLIENT_ID,
-    clientSecret: () => process.env.GOOGLE_CLIENT_SECRET,
-    authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
-    tokenUrl: 'https://oauth2.googleapis.com/token',
-    scope: 'openid email profile'
-  },
-  facebook: {
-    clientId: () => process.env.FACEBOOK_CLIENT_ID,
-    clientSecret: () => process.env.FACEBOOK_CLIENT_SECRET,
-    authorizeUrl: 'https://www.facebook.com/v27.0/dialog/oauth',
-    tokenUrl: 'https://graph.facebook.com/v27.0/oauth/access_token',
-    scope: 'email,public_profile'
-  }
-};
 
 function oauthRedirectUri(provider) {
-  const apiUrl = (process.env.API_URL ?? `http://localhost:${process.env.PORT ?? 5000}`).replace(/\/+$/, '');
+  const apiUrl = (process.env.API_URL ?? `https://dormhive.site${process.env.PORT ?? 5000}`).replace(/\/+$/, '');
   return `${apiUrl}/api/v1/auth/${provider}/callback`;
 }
 
